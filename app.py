@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 from flask import Flask, render_template, request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
@@ -61,6 +62,7 @@ def get_gemini_client():
 
 def ask_ai(prompt):
     client = get_gemini_client()
+
     if not client:
         return (
             "ERROR: GEMINI_API_KEY is missing or invalid.\n\n"
@@ -68,16 +70,40 @@ def ask_ai(prompt):
             "GEMINI_API_KEY=YOUR_REAL_KEY, save the file, stop Flask with Ctrl+C, "
             "then run python app.py again."
         )
-    try:
-        response = client.models.generate_content(
-            model=(os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip(),
-            contents=prompt
-        )
-        return response.text or "No response received from AI."
-    except Exception as e:
-        return f"AI ERROR: {str(e)}"
 
+    model = (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
 
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+
+            return response.text or "No response received from AI."
+
+        except Exception as e:
+            error_message = str(e)
+
+            if "503" in error_message or "UNAVAILABLE" in error_message:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+
+                return (
+                    "AI is temporarily busy. "
+                    "Please try again in a few seconds."
+                )
+
+            if "429" in error_message or "RESOURCE_EXHAUSTED" in error_message:
+                return (
+                    "AI usage limit reached for now. "
+                    "Please try again after the Gemini quota resets."
+                )
+
+            return f"AI ERROR: {error_message}"
 def current_user():
     user_id = session.get("user_id")
     if not user_id:
